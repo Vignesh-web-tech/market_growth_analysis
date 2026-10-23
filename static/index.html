@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Growth Analysis</title>
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f6f6f4; color: #222; }
+  header { background: #1e3a8a; color: #fff; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 20px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  .panel { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 13px; color: #555; margin-bottom: 4px; }
+  input[type=number], textarea { width: 100%; box-sizing: border-box; padding: 7px; border: 1px solid #bbb; border-radius: 5px; font-size: 14px; }
+  textarea { font-family: Consolas, monospace; height: 70px; }
+  button { background: #2563eb; color: #fff; border: 0; padding: 9px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; margin-right: 8px; }
+  button.secondary { background: #6b7280; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 14px; }
+  .card .v { font-size: 22px; font-weight: 600; color: #1e3a8a; }
+  .card .t { font-size: 12px; color: #666; }
+  .badge { display: inline-block; padding: 3px 9px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .hit { background: #d1fae5; color: #065f46; } .miss { background: #fee2e2; color: #991b1b; }
+  img { max-width: 100%; border: 1px solid #ddd; border-radius: 6px; background: #fff; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 16px; }
+  #error { color: #b91c1c; font-weight: 600; }
+  a { color: #2563eb; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; } td, th { border: 1px solid #ddd; padding: 6px; text-align: right; } th { background: #f0f0f0; }
+</style>
+</head>
+<body>
+<header><h1>Market Growth Analysis: TAM / SAM / SOM</h1></header>
+<main>
+  <div class="panel">
+    <div class="grid">
+      <div><label>% of businesses advertising online (0-1)</label><input id="pct" type="number" step="0.001" value="0.02"></div>
+      <div><label>Price per customer per year (Rs)</label><input id="price" type="number" step="1000" value="60000"></div>
+      <div><label>SAM share of advertisers (0-1)</label><input id="sam" type="number" step="0.01" value="0.30"></div>
+      <div><label>Monthly churn (0-1)</label><input id="churn" type="number" step="0.005" value="0.03"></div>
+      <div><label>Base SAM growth per year (0-1)</label><input id="growth" type="number" step="0.01" value="0.20"></div>
+    </div>
+    <p><label>Competitor revenue in Rs crore (optional JSON, e.g. {"CompetitorA": 120})</label>
+    <textarea id="competitors" placeholder='{}'></textarea></p>
+    <button onclick="run(true)">Run analysis</button>
+    <button class="secondary" onclick="run(false)">Refresh (ignore cache)</button>
+    <button class="secondary" onclick="showCache()">Cache stats</button>
+    <button class="secondary" onclick="clearCache()">Clear cache</button>
+    <span id="status"></span> <span id="error"></span>
+  </div>
+
+  <div id="results" style="display:none">
+    <div class="cards" id="cards"></div>
+    <p>
+      <a id="excel" href="#">Download Excel</a> |
+      <a id="summary" href="#">Download summary (.md)</a>
+    </p>
+    <div class="charts" id="charts"></div>
+    <div class="panel"><h3>Churn stress test</h3><div id="churn-table"></div></div>
+  </div>
+  <div class="panel" id="cache-panel" style="display:none"><h3>Cache</h3><pre id="cache-out"></pre></div>
+</main>
+
+<script>
+const fmt = n => n >= 100 ? Math.round(n).toLocaleString("en-IN") : n.toFixed(1);
+const $ = id => document.getElementById(id);
+
+async function run(useCache) {
+  $("error").textContent = ""; $("status").innerHTML = "Running...";
+  let competitors = null;
+  const raw = $("competitors").value.trim();
+  if (raw) { try { competitors = JSON.parse(raw); } catch (e) { $("error").textContent = "Competitors must be valid JSON"; $("status").textContent = ""; return; } }
+  const body = {
+    inputs: {
+      pct_advertising_online: parseFloat($("pct").value),
+      price_per_customer_per_year: parseFloat($("price").value),
+      sam_share: parseFloat($("sam").value),
+      monthly_churn: parseFloat($("churn").value),
+      growth_base: parseFloat($("growth").value)
+    },
+    competitors: competitors,
+    use_cache: useCache
+  };
+  try {
+    const r = await fetch("/market/analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await r.json();
+    if (!r.ok) { $("error").textContent = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail); $("status").textContent = ""; return; }
+    render(data);
+  } catch (e) { $("error").textContent = "Request failed: " + e; $("status").textContent = ""; }
+}
+
+function render(data) {
+  const s = data.summary, c = data.cache, res = data.result;
+  $("status").innerHTML = c.hit ? `<span class="badge hit">CACHE HIT (${c.age_seconds}s old)</span>` : `<span class="badge miss">CACHE MISS: calculated fresh</span>`;
+  $("results").style.display = "block";
+  const ms = res.market_size;
+  const cards = [
+    ["TAM range (Rs cr)", fmt(s.tam_range_cr[0]) + " - " + fmt(s.tam_range_cr[1]), "top-down vs bottom-up gap " + (ms.gap_pct * 100).toFixed(1) + "% " + (ms.credible ? "(credible)" : "(TOO WIDE)")],
+    ["SAM " + res.years[0] + " (Rs cr)", fmt(s.sam_2026_cr), (res.sam.share_of_tam * 100).toFixed(0) + "% of TAM"],
+    ["SAM " + s.sam_end_year + " base (Rs cr)", fmt(s.sam_end_base_cr), "conservative " + fmt(res.scenarios.conservative.sam_end_cr) + " / aggressive " + fmt(res.scenarios.aggressive.sam_end_cr)],
+    ["SOM ARR year " + res.som.years.length + " (Rs cr)", fmt(s.som_arr_end_cr), "CAGR " + (s.som_arr_cagr * 100).toFixed(0) + "% from year 1"]
+  ];
+  $("cards").innerHTML = cards.map(x => `<div class="card"><div class="t">${x[0]}</div><div class="v">${x[1]}</div><div class="t">${x[2]}</div></div>`).join("");
+  $("excel").href = data.excel_url; $("summary").href = data.summary_url;
+  $("charts").innerHTML = Object.values(data.chart_urls).map(u => `<img src="${u}" alt="chart">`).join("");
+  const rows = res.churn.rows.map(r => `<tr><td>${r.year}</td><td>${Math.round(r.net_adds).toLocaleString()}</td><td>${Math.round(r.customers_lost_to_churn).toLocaleString()}</td><td>${Math.round(r.gross_adds_needed).toLocaleString()}</td><td>${r.closing_customers.toLocaleString()}</td></tr>`).join("");
+  $("churn-table").innerHTML = `<table><tr><th>Year</th><th>Net adds</th><th>Lost to churn</th><th>New customers needed</th><th>Active customers</th></tr>${rows}</table>`;
+}
+
+async function showCache() {
+  const r = await fetch("/market/cache"); const d = await r.json();
+  $("cache-panel").style.display = "block"; $("cache-out").textContent = JSON.stringify(d, null, 2);
+}
+async function clearCache() {
+  const r = await fetch("/market/cache", { method: "DELETE" }); const d = await r.json();
+  $("cache-panel").style.display = "block"; $("cache-out").textContent = "Cleared entries: " + d.cleared_entries;
+}
+</script>
+</body>
+</html>
